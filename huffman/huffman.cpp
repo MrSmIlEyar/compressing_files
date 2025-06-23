@@ -4,273 +4,268 @@
 #include <queue>
 #include <unordered_map>
 #include <vector>
-#include <bitset>
+#include <memory>
+#include <cstdint>
 
 using namespace std;
 
+// Узел дерева Хаффмана с shared_ptr для удобства управления памятью
 struct Node {
-    char ch;
+    uint8_t ch;
     int freq;
-    Node *left, *right;
-    Node(char c, int f, Node* l = nullptr, Node* r = nullptr) : ch(c), freq(f), left(l), right(r) {}
+    shared_ptr<Node> left;
+    shared_ptr<Node> right;
+
+    // Конструктор для листового узла
+    Node(uint8_t c, int f) : ch(c), freq(f), left(nullptr), right(nullptr) {}
+    // Конструктор для внутреннего узла
+    Node(int f, shared_ptr<Node> l, shared_ptr<Node> r)
+        : ch(0), freq(f), left(move(l)), right(move(r)) {}
 };
 
-// Сравнение для приоритетной очереди
-struct comp {
-    bool operator()(Node* l, Node* r) {
-        return l->freq > r->freq;
+// Компаратор для очереди с shared_ptr
+struct Compare {
+    bool operator()(const shared_ptr<Node>& a, const shared_ptr<Node>& b) {
+        return a->freq > b->freq;
     }
 };
 
-// Вывод дерева с отступами (рекурсивно)
-void printTree(Node* root, string prefix = "") {
-    if (!root) return;
-    if (!root->left && !root->right) {
-        cout << prefix << "'" << root->ch << "' (" << root->freq << ")\n";
-    } else {
-        cout << prefix << "* (" << root->freq << ")\n";
-        printTree(root->left, prefix + " 0 ");
-        printTree(root->right, prefix + " 1 ");
-    }
-}
+// Построение дерева Хаффмана с использованием shared_ptr
+shared_ptr<Node> buildTree(const unordered_map<uint8_t, int>& freqMap) {
+    priority_queue<shared_ptr<Node>, vector<shared_ptr<Node>>, Compare> pq;
 
-Node* buildTree(const unordered_map<char,int>& freq) {
-    priority_queue<Node*, vector<Node*>, comp> pq;
-    for (auto& p : freq)
-        pq.push(new Node(p.first, p.second));
+    // Создаём листовые узлы
+    for (const auto& p : freqMap) {
+        pq.push(make_shared<Node>(p.first, p.second));
+    }
+
+    // Строим дерево
     while (pq.size() > 1) {
-        Node* left = pq.top(); pq.pop();
-        Node* right = pq.top(); pq.pop();
-        pq.push(new Node('\0', left->freq + right->freq, left, right));
+        auto left = pq.top(); pq.pop();
+        auto right = pq.top(); pq.pop();
+
+        int sumFreq = left->freq + right->freq;
+        pq.push(make_shared<Node>(sumFreq, left, right));
     }
+
+    if (pq.empty()) return nullptr;
     return pq.top();
 }
 
-void buildCodes(Node* root, const string& prefix, unordered_map<char,string>& codes) {
-    if (!root) return;
-    if (!root->left && !root->right) {
-        codes[root->ch] = prefix;
+// Рекурсивная генерация кодов Хаффмана
+void generateCodes(const Node* node, const string& code, unordered_map<uint8_t, string>& codes) {
+    if (!node) return;
+
+    if (!node->left && !node->right) {
+        codes[node->ch] = code;
+        return;
     }
-    buildCodes(root->left, prefix + "0", codes);
-    buildCodes(root->right, prefix + "1", codes);
+
+    generateCodes(node->left.get(), code + "0", codes);
+    generateCodes(node->right.get(), code + "1", codes);
 }
 
-void deleteTree(Node* root) {
-    if (!root) return;
-    deleteTree(root->left);
-    deleteTree(root->right);
-    delete root;
-}
-
-void saveCodes(ofstream& out, const unordered_map<char,string>& codes) {
-    size_t count = codes.size();
-    out.write(reinterpret_cast<const char*>(&count), sizeof(count));
-    for (auto& p : codes) {
-        char c = p.first;
-        out.write(&c, sizeof(c));
-        size_t len = p.second.size();
-        out.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        out.write(p.second.data(), len);
-    }
-}
-
-// Возвращает таблицу кодов из файла
-unordered_map<char,string> loadCodes(ifstream& in) {
-    unordered_map<char,string> codes;
-    size_t count;
-    in.read(reinterpret_cast<char*>(&count), sizeof(count));
-    for (size_t i = 0; i < count; i++) {
-        char c;
-        in.read(&c, sizeof(c));
-        size_t len;
-        in.read(reinterpret_cast<char*>(&len), sizeof(len));
-        string code(len, ' ');
-        in.read(&code[0], len);
-        codes[c] = code;
-    }
-    return codes;
-}
-
-// Класс для записи битов в файл эффективно
+// Класс для записи битов в поток
 class BitWriter {
-    ofstream& out;
-    uint8_t buffer = 0;
-    int bitsFilled = 0;
+    ostream& out_;
+    uint8_t buffer_ = 0;
+    int bitPos_ = 0;
+
 public:
-    BitWriter(ofstream& os) : out(os) {}
+    BitWriter(ostream& out) : out_(out) {}
+
+    ~BitWriter() {
+        flush();
+    }
+
     void writeBit(bool bit) {
-        buffer <<= 1;
-        if (bit) buffer |= 1;
-        bitsFilled++;
-        if (bitsFilled == 8) {
-            out.put(buffer);
-            buffer = 0;
-            bitsFilled = 0;
+        if (bit) {
+            buffer_ |= (1 << (7 - bitPos_));
+        }
+        ++bitPos_;
+
+        if (bitPos_ == 8) {
+            out_.put(buffer_);
+            buffer_ = 0;
+            bitPos_ = 0;
         }
     }
+
     void writeBits(const string& bits) {
         for (char c : bits) {
             writeBit(c == '1');
         }
     }
+
     void flush() {
-        if (bitsFilled > 0) {
-            buffer <<= (8 - bitsFilled);
-            out.put(buffer);
-            buffer = 0;
-            bitsFilled = 0;
+        if (bitPos_ > 0) {
+            out_.put(buffer_);
+            buffer_ = 0;
+            bitPos_ = 0;
         }
     }
 };
 
-// Класс для чтения битов из файла эффективно
+// Класс для чтения битов из потока
 class BitReader {
-    ifstream& in;
-    uint8_t buffer = 0;
-    int bitsLeft = 0;
+    istream& in_;
+    uint8_t buffer_ = 0;
+    int bitPos_ = 8;
+
 public:
-    BitReader(ifstream& is) : in(is) {}
+    BitReader(istream& in) : in_(in) {}
+
     bool readBit(bool& bit) {
-        if (bitsLeft == 0) {
-            int val = in.get();
-            if (val == EOF) return false;
-            buffer = (uint8_t)val;
-            bitsLeft = 8;
+        if (bitPos_ == 8) {
+            int byte = in_.get();
+            if (byte == EOF) return false;
+            buffer_ = static_cast<uint8_t>(byte);
+            bitPos_ = 0;
         }
-        bit = (buffer & (1 << (bitsLeft - 1))) != 0;
-        bitsLeft--;
+
+        bit = (buffer_ >> (7 - bitPos_)) & 1;
+        ++bitPos_;
         return true;
     }
 };
 
+// Функция сжатия файла
 void encodeFile(const string& inputFile, const string& outputFile) {
     ifstream in(inputFile, ios::binary);
     if (!in) {
         cerr << "Cannot open input file\n";
-        exit(1);
+        return;
     }
-    string text((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
 
-    unordered_map<char,int> freq;
-    for (char c : text)
-        freq[c]++;
+    vector<uint8_t> data((istreambuf_iterator<char>(in)), {});
+    in.close();
 
-    Node* root = buildTree(freq);
+    if (data.size() < 32) {
+        ofstream out(outputFile, ios::binary);
+        out.put('U'); // Маркер несжатого файла
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        return;
+    }
 
-    cout << "Huffman Tree:\n";
-    printTree(root);
+    unordered_map<uint8_t, int> freqMap;
+    for (uint8_t c : data) freqMap[c]++;
 
-    unordered_map<char,string> codes;
-    buildCodes(root, "", codes);
-
-    deleteTree(root);
+    auto root = buildTree(freqMap);
+    unordered_map<uint8_t, string> codes;
+    generateCodes(root.get(), "", codes);
 
     ofstream out(outputFile, ios::binary);
-    if (!out) {
-        cerr << "Cannot open output file\n";
-        exit(1);
+    out.put('C'); // Маркер сжатого файла
+    uint32_t dataSize = data.size();
+    out.write(reinterpret_cast<const char*>(&dataSize), sizeof(dataSize));
+    uint16_t uniqueCount = freqMap.size();
+    out.write(reinterpret_cast<const char*>(&uniqueCount), sizeof(uniqueCount));
+
+    for (const auto& p : freqMap) {
+        out.put(p.first);
+        uint32_t freq = p.second;
+        out.write(reinterpret_cast<const char*>(&freq), sizeof(freq));
     }
 
-    // Записать таблицу кодов
-    saveCodes(out, codes);
-
-    // Записать длину битовой последовательности
-    size_t totalBits = 0;
-    for (char c : text)
-        totalBits += codes[c].size();
-    out.write(reinterpret_cast<const char*>(&totalBits), sizeof(totalBits));
-
-    // Записать сжатые данные
-    BitWriter bw(out);
-    for (char c : text) {
-        bw.writeBits(codes[c]);
+    BitWriter writer(out);
+    for (uint8_t c : data) {
+        writer.writeBits(codes[c]);
     }
-    bw.flush();
-
-    cout << "Encoding done. Original size: " << text.size() << " bytes, Compressed size: " << out.tellp() << " bytes\n";
 }
 
+// Функция распаковки файла
 void decodeFile(const string& inputFile, const string& outputFile) {
     ifstream in(inputFile, ios::binary);
     if (!in) {
         cerr << "Cannot open input file\n";
-        exit(1);
+        return;
     }
 
-    unordered_map<char,string> codes = loadCodes(in);
+    char marker;
+    in.get(marker);
 
-    size_t totalBits;
-    in.read(reinterpret_cast<char*>(&totalBits), sizeof(totalBits));
+    if (marker == 'U') {
+        // Несжатый файл — просто копируем
+        ofstream out(outputFile);
+        char c;
+        while (in.get(c)) out.put(c);
+        return;
+    }
 
-    // Для декодирования удобнее построить дерево из таблицы кодов
-    // Вот функция построения дерева из кодов:
+    if (marker != 'C') {
+        cerr << "Invalid file format\n";
+        return;
+    }
 
-    Node* root = new Node('\0', 0);
-    for (auto& p : codes) {
-        Node* current = root;
-        const string& code = p.second;
-        for (char bit : code) {
-            if (bit == '0') {
-                if (!current->left)
-                    current->left = new Node('\0', 0);
-                current = current->left;
-            } else {
-                if (!current->right)
-                    current->right = new Node('\0', 0);
-                current = current->right;
-            }
+    uint32_t dataSize;
+    if (!in.read(reinterpret_cast<char*>(&dataSize), sizeof(dataSize))) {
+        cerr << "Failed to read data size\n";
+        return;
+    }
+
+    uint16_t uniqueCount;
+    if (!in.read(reinterpret_cast<char*>(&uniqueCount), sizeof(uniqueCount))) {
+        cerr << "Failed to read unique count\n";
+        return;
+    }
+
+    unordered_map<uint8_t, int> freqMap;
+    for (int i = 0; i < uniqueCount; ++i) {
+        uint8_t c = in.get();
+        if (in.eof()) {
+            cerr << "Unexpected end of file\n";
+            return;
         }
-        current->ch = p.first;
+        uint32_t freq;
+        if (!in.read(reinterpret_cast<char*>(&freq), sizeof(freq))) {
+            cerr << "Failed to read frequency\n";
+            return;
+        }
+        freqMap[c] = freq;
     }
 
-    ofstream out(outputFile, ios::binary);
-    if (!out) {
-        cerr << "Cannot open output file\n";
-        exit(1);
+    auto root = buildTree(freqMap);
+    if (!root) {
+        cerr << "Failed to build Huffman tree\n";
+        return;
     }
 
-    BitReader br(in);
-    Node* current = root;
-    for (size_t i = 0; i < totalBits; i++) {
-        bool bit;
-        if (!br.readBit(bit)) {
-            cerr << "Unexpected EOF while reading bits\n";
+    // Открываем файл в текстовом режиме для записи символов
+    ofstream out(outputFile);
+
+    // Обработка случая дерева из одного узла
+    if (!root->left && !root->right) {
+        for (uint32_t i = 0; i < dataSize; ++i) {
+            out.put(static_cast<char>(root->ch));
+        }
+        return;
+    }
+
+    BitReader reader(in);
+    const Node* node = root.get();
+    uint32_t written = 0;
+    bool bit;
+
+    while (written < dataSize) {
+        if (!reader.readBit(bit)) {
+            cerr << "Unexpected end of file\n";
             break;
         }
-        if (bit) current = current->right;
-        else current = current->left;
 
-        if (!current->left && !current->right) {
-            out.put(current->ch);
-            current = root;
+        node = bit ? node->right.get() : node->left.get();
+        if (!node) {
+            cerr << "Invalid bit sequence\n";
+            break;
+        }
+
+        if (!node->left && !node->right) {
+            out.put(static_cast<char>(node->ch));
+            node = root.get();
+            ++written;
         }
     }
 
-    cout << "Decoding done.\n";
-
-    deleteTree(root);
-}
-
-int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        cout << "Usage:\n";
-        cout << argv[0] << " encode <input_file> <output_file>\n";
-        cout << argv[0] << " decode <input_file> <output_file>\n";
-        return 1;
+    if (written != dataSize) {
+        cerr << "Size mismatch: expected " << dataSize << ", decoded " << written << "\n";
     }
-
-    string mode = argv[1];
-    string inputFile = argv[2];
-    string outputFile = argv[3];
-
-    if (mode == "encode") {
-        encodeFile(inputFile, outputFile);
-    } else if (mode == "decode") {
-        decodeFile(inputFile, outputFile);
-    } else {
-        cerr << "Unknown mode: " << mode << "\n";
-        return 1;
-    }
-
-    return 0;
 }

@@ -7,32 +7,6 @@
 
 using namespace std;
 
-uint64_t getFileSize(const string& filePath) {
-    ifstream file(filePath, ios::binary | ios::ate);
-    if (!file) return UINT64_MAX;
-    streampos pos = file.tellg();
-    return static_cast<uint64_t>(pos);
-}
-
-void printFileStats(const string& inputPath, const string& outputPath) {
-    uint64_t originalSize = getFileSize(inputPath);
-    uint64_t compressedSize = getFileSize(outputPath);
-    
-    if (originalSize == UINT64_MAX || compressedSize == UINT64_MAX) {
-        cerr << "Error getting file sizes!" << endl;
-        return;
-    }
-
-    double ratio = (originalSize > 0) 
-        ? (1.0 - static_cast<double>(compressedSize) / originalSize) * 100.0
-        : 0.0;
-
-    cout << "Original size: " << originalSize << " bytes\n"
-         << "Compressed size: " << compressedSize << " bytes\n"
-         << "Compression ratio: " << fixed << setprecision(2) 
-         << ratio << "%\n";
-}
-
 void compressFileRLE(const string& inputPath, const string& outputPath) {
     ifstream input(inputPath, ios::binary);
     ofstream output(outputPath, ios::binary);
@@ -116,40 +90,4 @@ void decompressFileRLE(const string& inputPath, const string& outputPath) {
 
     input.close();
     output.close();
-}
-
-
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        cerr << "Usage: rle.exe <compress|decompress> <input> <output>\n";
-        return 1;
-    }
-
-    string mode = argv[1];
-    string input = argv[2];
-    string output = argv[3];
-
-    uint64_t size = getFileSize(input);
-    if (size == UINT64_MAX) {
-        cerr << "Error reading input file!" << endl;
-        return 1;
-    }
-
-    if (mode == "compress") {
-        compressFileRLE(input, output);
-        cout << "Compression complete!\n";
-        printFileStats(input, output);
-    } else if (mode == "decompress") {
-        decompressFileRLE(input, output);
-        cout << "Decompression complete!\n";
-        uint64_t outSize = getFileSize(output);
-        if (outSize != UINT64_MAX) {
-            cout << "Decompressed size: " << outSize << " bytes\n";
-        }
-    } else {
-        cerr << "Invalid mode!" << endl;
-        return 1;
-    }
-
-    return 0;
 }
